@@ -4,7 +4,7 @@ source("functions.R") #
 ####### Data pre-processing & plotting #######
 ############################################################
 
-load("SP.RData")
+load("FIN.RData")
 n <- nrow(dataorig)
 d <- ncol(dataorig)
 data <- apply(dataorig, 2, function(i) pmax(-i, rep(0, n))) 
@@ -79,12 +79,12 @@ dev.off()
 #    Ahat5[[count+1]] <- decompOne(tdm$Sigma, tolr = 5)$A
 #    Atilde[[count+1]] <- tdm$A
 #    count <- count + 1
-#   save(Ahat, Ahat5, Atilde, alpha, file = "SPres.RData")
+#   save(Ahat, Ahat5, Atilde, alpha, file = "FINres.RData")
 #  }
 #  I <- I + 1
 #}
 
-load("SPres.RData")
+load("FINres.RData")
 
 nsim <- 100
 q <- 0.005
