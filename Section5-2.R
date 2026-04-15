@@ -1,162 +1,289 @@
-source("functions.R") #
+source("functions.R")
 
 ############################################################
 ####### Data pre-processing & plotting #######
 ############################################################
 
-load("FIN.RData")
-n <- nrow(dataorig)
-d <- ncol(dataorig)
-data <- apply(dataorig, 2, function(i) pmax(-i, rep(0, n))) 
+load("Wind.RData")
+d <- nrow(coord)
+n <- nrow(gust)
 
-alphaci <- matrix(0, ncol = 3, nrow = d)
-for(i in 1:d){ #takes a minute
-  alpha <- Hilleye(data[,i], smooth = FALSE, knseq = c(15:1000))  
-  bootalpha <- tsboot(data[,i], statistic = HillBoot, R = 500, sim = "geom",
-                      l = 200, kn = alpha$keye)
-  alphaci[i,1] <- bootalpha$t0
-  alphaci[i,2] <- quantile(bootalpha$t, 0.025)
-  alphaci[i,3] <- quantile(bootalpha$t, 0.925)
-}
+xlon <- sort(unique(coord$LON))
+ylat <- sort(unique(coord$LAT))
+ylatlim <- c(floor(min(ylat)), ceiling(max(ylat)))
+xlonlim <- c(floor(min(xlon)), ceiling(max(xlon)))
+indsea <- c(1,2,3,4,5, 6, 7, 9, 11, 14, 21, 22, 23, 24, 25, 26, 27)
+indland <- c(1:d)[-indsea]
+LonLat <- coord[,2:3]
+d1 <- length(indsea)
+d2 <- length(indland)
 
-kall <- Hilleye(c(data), c(50:5000), smooth = FALSE)$keye
-(alpha <- 1/Hill(sort(c(data), decreasing = TRUE), kall))
+map("world", col= "white", fill = T, bg = "white", xlim = c(3.3,7.2), ylim = c(50.775, 53.45))
+title("d = 35 stations", cex.main = 2)
+points(LonLat[indsea,], pch = 19, col = "chocolate", cex = 1.5)
+points(LonLat[indland,], pch = 19, col = "Forestgreen", cex = 1.5)
 
-par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2))
-plot(alphaci[,1], pch = 20, col = "red", ylim = c(0,7), ylab = expression(paste(hat(alpha)[j])), 
-     xlab = "j", main = expression(paste("Estimates ", hat(alpha)[j], " with 95 % bootstrap confidence intervals")))
-points(alphaci[,2], pch = 20, col = "blue")
-points(alphaci[,3], pch = 20, col = "blue")
-for(i in 1:d){
-  segments(i, alphaci[i,2], i, alphaci[i,3], col = 'grey')
-}
-abline(h = alpha) 
+# data organized as sea stations (17) and then inland stations (18)
+coord <- coord[c(indsea,indland),]
 
-R <- apply(data, 1, function(i) sum(i^alpha)^(1/alpha))
-qu <- seq(0.95,0.999, by = 0.0005)
-r <- quantile(R, qu)
-m <- vector(length = length(qu))
-for(i in 1:length(qu)){
-  indx <- which(R > r[i])
-  nexc <- length(indx)
-  m[i] <- nexc*((r[i]^alpha)/n)
-}
+dataorig <- cbind(gust[,indsea+1], gust[,indland+1])
+dataoland <- dataorig[,(d1+1):d]
+dataosea <- dataorig[,1:d1]
 
-par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2))
-plot(qu, m, ylab = expression(paste(hat(m))), type = "l", lwd = 2,
-     xlab = expression(paste("quantile of ", R[1], ", ..., ", R[n])), 
-     main = expression(paste("Estimated mass ", hat(m), " as a function of ", r[0])))
-abline(h = 30)
+# standardized to alpha = 2
+data <- apply(dataorig, 2, function(i) (-log(Fgpd(i)))^(-1/2))
+dataland <- data[,(d1+1):d]
+datasea <- data[,1:d1]
+
+
+########################################################
+####### Chi and TPDM #######
+############################################################
+
+Sigma <- tailDepMatrix(data, alpha = 2, qu = 0.95, mest = FALSE)$Sigma
+Sigmasea <- tailDepMatrix(datasea, alpha = 2, qu = 0.95, mest = FALSE)$Sigma
+Sigmaland <- tailDepMatrix(dataland, alpha = 2, qu = 0.95, mest = FALSE)$Sigma
+
+chis <- chiPairs(data, coord$LAT, coord$LON)
+chisea <- chiPairs(data[,1:d1], coord$LAT[1:d1], coord$LON[1:d1])
+chiland <- chiPairs(data[,(d1+1):d], coord$LAT[(d1+1):d], coord$LON[(d1+1):d])
+
+pdf("WINDchi.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2))
+plot(chis, pch = 19, xlab = 'distance (in km)', ylab = expression(paste(chi[jk])), main = expression(paste("Tail dependence coefficients ", chi[jk])), ylim = c(0.3, 1))
+points(chisea, col = "brown", pch = 19)
+points(chiland, col = "Forestgreen", pch = 19)
+tmpsea <- loess.smooth(chisea[,1], chisea[,2])
+tmpland <- loess.smooth(chiland[,1], chiland[,2])
+lines(tmpsea, lwd = 3, col = "brown")
+lines(tmpland, lwd = 3, col = "Forestgreen")
+legend("topright", legend = c("coast", "inland"), col = c("brown", "Forestgreen"), lwd = c(3,3), cex = 2)
 dev.off()
 
-#####################################################################
-################ Main results ########################
-#####################################################################
+tpdms <- cbind(chis[,1], Sigma[lower.tri(Sigma)])
+tpdmsea <- cbind(chisea[,1], Sigmasea[lower.tri(Sigmasea)])
+tpdmland <- cbind(chiland[,1], Sigmaland[lower.tri(Sigmaland)])
 
-# The commented code below produces the file SPres.RData. It takes about 24h to run.
+pdf("WINDtpdm.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2))
+plot(tpdms, pch = 19, xlab = 'distance (in km)', ylab = expression(paste(sigma[jk])), main = expression(paste("TPDM entries ", sigma[jk])), ylim = c(0.625, 1))
+points(tpdmsea, col = "brown", pch = 19)
+points(tpdmland, col = "ForestGreen", pch = 19)
+tmpsea <- loess.smooth(tpdmsea[,1], tpdmsea[,2])
+tmpland <- loess.smooth(tpdmland[,1], tpdmland[,2])
+lines(tmpsea, lwd = 3, col = "brown")
+lines(tmpland, lwd = 3, col = "Forestgreen")
+legend("topright", legend = c("coast", "land"), col = c("brown", "Forestgreen"), lwd = c(3,3), cex = 2)
+dev.off()
 
-#Atilde <- Ahat <- Ahat5 <- vector('list', length = nsim+1)
-#alpha <- vector(length = nsim+1)
-#kall <- Hilleye(c(data), c(50:10000), smooth = FALSE)$keye
-#alpha[1] <- 1/Hill(sort(c(data), decreasing = TRUE), kall)
-#Sigma <- tailDepMatrix(data, alpha = alpha[1], qu = 0.975, mest = TRUE)$Sigma
-#Atilde[[1]] <- tailDepMatrix(data, alpha = alpha[1], qu = 0.975, mest = TRUE)$A
-#Ahat[[1]] <- decompOne(Sigma)$A
-#Ahat5[[1]] <- decompOne(Sigma, tolr =  5)$A
 
-#I <- count <- 1
-#while(count <= nsim){
-#  set.seed(I)
-#  nsample <- sample(1:n,size=n,replace=T)
-#  newdata <- data[nsample,]
-#  kall <- Hilleye(c(newdata), c(50:10000), smooth = FALSE)$keye
-#  alphatemp <- 1/Hill(sort(c(newdata), decreasing = TRUE), kall)
-#  tdm <- tailDepMatrix(newdata, alpha = alphatemp, qu = 0.975, mest = TRUE)
-#  Ahattemp <- decompOne(tdm$Sigma, maxsim = 1000)$A #tries during 5 minutes max 
-#  if(!is.null(Ahattemp)){
-#    alpha[count+1] <- alphatemp
-#    Ahat[[count+1]] <- Ahattemp
-#    Ahat5[[count+1]] <- decompOne(tdm$Sigma, tolr = 5)$A
-#    Atilde[[count+1]] <- tdm$A
-#    count <- count + 1
-#   save(Ahat, Ahat5, Atilde, alpha, file = "FINres.RData")
-#  }
-#  I <- I + 1
-#}
+############################################################
 
-load("FINres.RData")
+x1 <- 1
+x2 <- 1.2
+x3 <- 1.3
+
+x1sum <- 0.8
+x2sum <- 0.9
+x3sum <- 1
 
 nsim <- 100
-q <- 0.005
-v <- rep(c(0.02,0.05,0.03), 10)
+N <- 10^5
 
-minsum <- function(x, v = rep(1/length(x), length(x))){
-  return(min(sum(x[1:10]*v[1:10]),sum(x[11:20]*v[11:20]),sum(x[21:30]*v[21:30])))
+############################################################
+####### Inland stations analysis #######
+############################################################
+
+Atildeland <- Ahatland <- Yoland <- Yotildeland <- vector('list', length = nsim+1)
+Atildeland[[1]] <- tailDepMatrix(dataland, alpha = 2, qu = 0.95, mest = FALSE)$A
+Ahatland[[1]] <- decompOne(Sigmaland)$A
+Ystarland <- MaxLinearSim(Ahatland[[1]], N = N)
+Ystartildeland <- MaxLinearSim(Atildeland[[1]], N = N)
+Yoland[[1]] <- sapply(c(1:d2), function(i) FgpdInv(dataoland[,i], exp(-Ystarland[,i]^(-2))))
+Yotildeland[[1]] <- sapply(c(1:d2), function(i) FgpdInv(dataoland[,i], exp(-Ystartildeland[,i]^(-2))))
+
+
+for(I in 1:nsim){ #takes a couple of minutes
+  print(I)
+  set.seed(I)
+  nsample <- sample(1:n,size=n,replace=T)
+  newdatao <- dataoland[nsample,]
+  newdata <- apply(newdatao, 2, function(i) (-log(Fgpd(i, qu = 0.95)))^(-1/2))
+  tdm <- tailDepMatrix(newdata, alpha = 2, qu = 0.95, mest = FALSE)
+  Ahatland[[I+1]] <- decompOne(tdm$Sigma)$A
+  Atildeland[[I+1]] <- tdm$A
+  Ystarland <- MaxLinearSim(Ahatland[[I+1]], N = N)
+  Ystartildeland <- MaxLinearSim(Atildeland[[I+1]], N = N)
+  Yoland[[I+1]] <- sapply(c(1:d2), function(i) FgpdInv(newdatao[,i], exp(-Ystarland[,i]^(-2))))
+  Yotildeland[[I+1]] <- sapply(c(1:d2), function(i) FgpdInv(newdatao[,i], exp(-Ystartildeland[,i]^(-2))))
+  }
+
+### max-region
+xq1land <- apply(dataoland, 2, function(i) (-log(Fgpd(i, y = x1, qu = 0.95)))^(-1/2))
+xq2land <- apply(dataoland, 2, function(i) (-log(Fgpd(i, y = x2, qu = 0.95)))^(-1/2))
+xq3land <- apply(dataoland, 2, function(i) (-log(Fgpd(i, y = x3, qu = 0.95)))^(-1/2))
+empq1land <- length(which(apply(dataoland, 1, max) >= x1))/n # 45 points
+empq2land <- length(which(apply(dataoland, 1, max) >= x2))/n # 5 points 
+empq3land <- length(which(apply(dataoland, 1, max) >= x3))/n # 1 point 
+probahatq1land <- sapply(Ahatland, function(i) MaxLinearProba(xq1land, i, 2, "max"))
+probahatq2land <- sapply(Ahatland, function(i) MaxLinearProba(xq2land, i, 2, "max"))
+probahatq3land <- sapply(Ahatland, function(i) MaxLinearProba(xq3land, i, 2, "max"))
+probatilq1land <- sapply(Atildeland, function(i) MaxLinearProba(xq1land, i, 2, "max"))
+probatilq2land <- sapply(Atildeland, function(i) MaxLinearProba(xq2land, i, 2, "max"))
+probatilq3land <- sapply(Atildeland, function(i) MaxLinearProba(xq3land, i, 2, "max"))
+
+### sum-region
+empq1land2 <- length(which(apply(dataoland, 1, mean) >= x1sum))/n # 48 points
+empq2land2 <- length(which(apply(dataoland, 1, mean) >= x2sum))/n # 15 points 
+empq3land2 <- length(which(apply(dataoland, 1, mean) >= x3sum))/n # 4 points
+probahatq1land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yoland[[i]]) >= x1sum))
+probahatq2land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yoland[[i]]) >= x2sum))
+probahatq3land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yoland[[i]]) >= x3sum))
+probatilq1land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildeland[[i]]) >= x1sum))
+probatilq2land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildeland[[i]]) >= x2sum))
+probatilq3land2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildeland[[i]]) >= x3sum))
+
+
+namesbox <- c(expression(paste(hat(A), " (exact)")), expression(tilde(A)))
+
+pdf("WINDmaxlandq1.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq1land,probatilq1land), xlab = "", ylim = c(0.008,0.014),
+        main = "Inland, max, 100 km/h", names = namesbox)
+points(rep(empq1land,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDmaxlandq2.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq2land,probatilq2land), xlab = "", ylim = c(0.0007,0.0014),
+        main = "Inland, max, 120 km/h", names = namesbox)
+points(rep(empq2land,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDmaxlandq3.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq3land,probatilq3land), xlab = "", ylim = c(0.00019,0.0003),
+        main = "Inland, max, 130 km/h", names = namesbox)
+points(rep(empq3land,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumlandq1.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq1land2,probatilq1land2), xlab = "", ylim = c(0.008,0.02),
+        main = "Inland, sum, 80 km/h", names = namesbox)
+points(rep(empq1land2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumlandq2.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq2land2,probatilq2land2), xlab = "", ylim = c(0.002,0.009),
+        main = "Inland, sum, 90 km/h", names = namesbox)
+points(rep(empq2land2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumlandq3.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq3land2,probatilq3land2), xlab = "", ylim = c(0,0.0035),
+        main = "Inland, sum, 100 km/h", names = namesbox)
+points(rep(empq3land2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+############################################################
+####### Coastal stations analysis #######
+############################################################
+
+Atildesea <- Ahatsea <- Yosea <- Yotildesea <- vector('list', length = nsim+1)
+Atildesea[[1]] <- tailDepMatrix(datasea, alpha = 2, qu = 0.95, mest = FALSE)$A
+Ahatsea[[1]] <- decompOne(Sigmasea)$A
+Ystarsea <- MaxLinearSim(Ahatsea[[1]], N = N)
+Ystartildesea <- MaxLinearSim(Atildesea[[1]], N = N)
+Yosea[[1]] <- sapply(c(1:d1), function(i) FgpdInv(dataosea[,i], exp(-Ystarsea[,i]^(-2))))
+Yotildesea[[1]] <- sapply(c(1:d1), function(i) FgpdInv(dataosea[,i], exp(-Ystartildesea[,i]^(-2))))
+
+
+for(I in 1:nsim){ #takes a couple of minutes
+  print(I)
+  set.seed(I)
+  nsample <- sample(1:n,size=n,replace=T)
+  newdatao <- dataosea[nsample,]
+  newdata <- apply(newdatao, 2, function(i) (-log(Fgpd(i, qu = 0.95)))^(-1/2))
+  tdm <- tailDepMatrix(newdata, alpha = 2, qu = 0.95, mest = FALSE)
+  Ahatsea[[I+1]] <- decompOne(tdm$Sigma)$A
+  Atildesea[[I+1]] <- tdm$A
+  Ystarsea <- MaxLinearSim(Ahatsea[[I+1]], N = N)
+  Ystartildesea <- MaxLinearSim(Atildesea[[I+1]], N = N)
+  Yosea[[I+1]] <- sapply(c(1:d1), function(i) FgpdInv(newdatao[,i], exp(-Ystarsea[,i]^(-2))))
+  Yotildesea[[I+1]] <- sapply(c(1:d1), function(i) FgpdInv(newdatao[,i], exp(-Ystartildesea[,i]^(-2))))
 }
-maxsum <- function(x, v = rep(1/length(x), length(x))){
-  return(max(sum(x[1:10]*v[1:10]),sum(x[11:20]*v[11:20]),sum(x[21:30]*v[21:30])))
-}
 
-qsum <- quantile(rowSums(data)/d, 1-q, type = 4) 
-ressumAtilde <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Atilde[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d, d)))
-ressumA <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Ahat[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d,d)))
-ressumA5 <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Ahat5[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d,d)))
+### max-region
+xq1sea <- apply(dataosea, 2, function(i) (-log(Fgpd(i, y = x1, qu = 0.95)))^(-1/2))
+xq2sea <- apply(dataosea, 2, function(i) (-log(Fgpd(i, y = x2, qu = 0.95)))^(-1/2))
+xq3sea <- apply(dataosea, 2, function(i) (-log(Fgpd(i, y = x3, qu = 0.95)))^(-1/2))
+empq1sea <- length(which(apply(dataosea, 1, max) >= x1))/n # 147 points
+empq2sea <- length(which(apply(dataosea, 1, max) >= x2))/n # 25 points 
+empq3sea <- length(which(apply(dataosea, 1, max) >= x3))/n # 12 points 
+probahatq1sea <- sapply(Ahatsea, function(i) MaxLinearProba(xq1sea, i, 2, "max"))
+probahatq2sea <- sapply(Ahatsea, function(i) MaxLinearProba(xq2sea, i, 2, "max"))
+probahatq3sea <- sapply(Ahatsea, function(i) MaxLinearProba(xq3sea, i, 2, "max"))
+probatilq1sea <- sapply(Atildesea, function(i) MaxLinearProba(xq1sea, i, 2, "max"))
+probatilq2sea <- sapply(Atildesea, function(i) MaxLinearProba(xq2sea, i, 2, "max"))
+probatilq3sea <- sapply(Atildesea, function(i) MaxLinearProba(xq3sea, i, 2, "max"))
 
-qminsum <- quantile(apply(data, 1, function(i) minsum(i)), 1-q, type = 5)
-resminsumAtilde <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
-resminsumA <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
-resminsumA5 <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
-
-qmaxsum <- quantile(apply(data, 1, function(i) maxsum(i)), 1-q, type = 5)
-resmaxsumAtilde <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
-resmaxsumA <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
-resmaxsumA5 <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
-
-namesbox <- c(expression(paste(hat(A), " (exact)")), expression(paste(hat(A), " (approx)")), expression(tilde(A)))
-
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(ressumA, ressumA5, ressumAtilde), names = namesbox, ylim = c(0.003,0.0071),
-        main = expression(paste("Estimates ", hat(p)[sum], " (equal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")
-
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(resminsumA, resminsumA5, resminsumAtilde), names = namesbox, ylim = c(0.003,0.0071),
-        main = expression(paste("Estimates ", hat(p)[minsum], " (equal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")
-
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(resmaxsumA, resmaxsumA5, resmaxsumAtilde), names = namesbox, ylim = c(0.003,0.0071),
-        main = expression(paste("Estimates ", hat(p)[maxsum], " (equal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")
+### sum-region
+empq1sea2 <- length(which(apply(dataosea, 1, mean) >= x1sum))/n # 148 points
+empq2sea2 <- length(which(apply(dataosea, 1, mean) >= x2sum))/n # 55 points 
+empq3sea2 <- length(which(apply(dataosea, 1, mean) >= x3sum))/n # 17 points
+probahatq1sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yosea[[i]]) >= x1sum))
+probahatq2sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yosea[[i]]) >= x2sum))
+probahatq3sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yosea[[i]]) >= x3sum))
+probatilq1sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildesea[[i]]) >= x1sum))
+probatilq2sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildesea[[i]]) >= x2sum))
+probatilq3sea2 <- sapply(1:(nsim+1), function(i) mean(rowMeans(Yotildesea[[i]]) >= x3sum))
 
 
-qsumv <- quantile(apply(data, 1, function(i) sum(v*i)),1-q, type = 4) 
-ressumAtildev <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Atilde[[k]]^(2/alpha[k]), alpha[k], "sum", v))
-ressumAv <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Ahat[[k]]^(2/alpha[k]), alpha[k], "sum", v))
-ressumA5v <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Ahat5[[k]]^(2/alpha[k]), alpha[k], "sum", v))
+namesbox <- c(expression(paste(hat(A), " (exact)")), expression(tilde(A)))
 
-qminsumv <- quantile(apply(data, 1, function(i) minsum(i, v)), 1-q, type = 5) 
-resminsumAtildev <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsumv, v)^alpha[k])))
-resminsumAv <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum,v)^alpha[k])))
-resminsumA5v <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum,v)^alpha[k])))
+pdf("WINDmaxseaq1.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq1sea,probatilq1sea), xlab = "", ylim = c(0.032,0.054),
+        main = "Coastal, max, 100 km/h", names = namesbox)
+points(rep(empq1sea,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
 
-qmaxsumv <- quantile(apply(data, 1, function(i) maxsum(i, v)), 1-q, type = 5) 
-resmaxsumAtildev <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsumv, v)^alpha[k])))
-resmaxsumAv <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum,v)^alpha[k])))
-resmaxsumA5v <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum,v)^alpha[k])))
+pdf("WINDmaxseaq2.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq2sea,probatilq2sea), xlab = "", ylim = c(0.0055,0.009),
+        main = "Coastal, max, 120 km/h", names = namesbox)
+points(rep(empq2sea,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDmaxseaq3.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq3sea,probatilq3sea), xlab = "", ylim = c(0.002,0.0036),
+        main = "Coastal, max, 130 km/h", names = namesbox)
+points(rep(empq3sea,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumseaq1.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq1sea2,probatilq1sea2), xlab = "", ylim = c(0.025,0.048),
+        main = "Coastal, sum, 80 km/h", names = namesbox)
+points(rep(empq1sea2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumseaq2.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq2sea2,probatilq2sea2), xlab = "", ylim = c(0.01,0.02),
+        main = "Coastal, sum, 90 km/h", names = namesbox)
+points(rep(empq2sea2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
+
+pdf("WINDsumseaq3.pdf")
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(probahatq3sea2,probatilq3sea2), xlab = "", ylim = c(0.003,0.009),
+        main = "Coastal, sum, 100 km/h", names = namesbox)
+points(rep(empq3sea2,2), pch = 15, cex = 1.75, col = "red")
+dev.off()
 
 
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(ressumAv, ressumA5v, ressumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
-        main = expression(paste("Estimates ", hat(p)[sum], " (unequal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")
-
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(resminsumAv, resminsumA5v, resminsumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
-        main = expression(paste("Estimates ", hat(p)[minsum], " (unequal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")
-
-par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
-boxplot(cbind(resmaxsumAv, resmaxsumA5v, resmaxsumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
-        main = expression(paste("Estimates ", hat(p)[maxsum], " (unequal ", v, ")")))
-points(rep(q,3), pch = 15, cex = 1.75, col = "red")

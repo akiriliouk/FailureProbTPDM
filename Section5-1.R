@@ -1,90 +1,173 @@
-source("functions.R")
+source("functions.R") #
 
-A1 <- rbind(c(1.00, 0.50, 0.00, 0.25, 1.75, 0.50, 0.75, 1.00, 1.00,  0.25,  1.75,  0.25,  1.50,  0.50,  0.25,  1.50),
-            c(2.00, 0.00, 1.50, 1.00, 1.00, 0.25, 1.00, 1.00, 1.75,  0.25,  0.00,  2.00,  0.25,  0.50,  0.25,  0.75),
-            c(1.75, 1.25, 0.75, 0.25, 0.50, 2.00, 1.75, 0.25, 0.75,  0.25,  1.25,  0.25,  1.00,  0.75,  1.00, 0.25),
-            c(1.25, 0.25, 2.00, 0.25, 1.25, 2.00, 0.50, 0.25, 0.50,  0.50,  0.00,  0.75,  0.50,  0.25,  1.75,  0.50),
-            c(1.75, 0.50, 0.75, 1.25, 0.25, 0.50, 1.75, 0.00, 2.00,  1.00,  1.50,  0.50,  0.00,  0.50,  1.25,  1.25))
-A2 <- A1[,1:8]
-A3 <- A1[,1:4]
-SigmaA1 <- A1 %*% t(A1)
-SigmaA2 <- A2 %*% t(A2)
-SigmaA3 <- A3 %*% t(A3)
+############################################################
+####### Data pre-processing & plotting #######
+############################################################
 
-f1 <- function(A, alpha, cst){ #sum
-  d <- nrow(A)
-  b <- rep(1/d,d)
-  temp <- apply(A, 2, function(i) (sum(b*i)^alpha))
-  return(sum(temp)*(cst^(-alpha)))
-}
-f2 <- function(A, alpha, cst){ #product
-  d <- nrow(A)
-  temp <- apply(A, 2, function(i) prod(i^(alpha/d)))
-  return(sum(temp)*(cst^(-alpha/d)))
-}
-f3 <- function(A, alpha, cst = 5){ #min
-  temp <- apply(A, 2, function(i) (min(i/cst)^alpha))
-  return(sum(temp))
-}
-f4 <- function(A, alpha, cst = 5){ #max
-  temp <- apply(A, 2, function(i) (max(i/cst)^alpha))
-  return(sum(temp))
+load("FIN.RData")
+n <- nrow(dataorig)
+d <- ncol(dataorig)
+data <- apply(dataorig, 2, function(i) pmax(-i, rep(0, n))) 
+
+alphaci <- matrix(0, ncol = 3, nrow = d)
+alphas <- numeric(d)
+for(i in 1:d){ #takes a minute
+  alpha <- Hilleye(data[,i], smooth = FALSE, knseq = c(15:1000))  
+  bootalpha <- tsboot(data[,i], statistic = HillBoot, R = 500, sim = "geom",
+                      l = 200, kn = alpha$keye)
+  alphas[i] <- alpha$keye
+  alphaci[i,1] <- bootalpha$t0
+  alphaci[i,2] <- quantile(bootalpha$t, 0.025)
+  alphaci[i,3] <- quantile(bootalpha$t, 0.925)
 }
 
-simResults <- function(alpha, Sigma, A){
-  d <- nrow(Sigma)
-  perms <- permutations(d)
-  rep <- factorial(d)
-  Alist <- vector('list', length = rep)
-  diff <- diffdiag <- vector(length = rep)
-  nu <- matrix(0, ncol = 4, nrow = rep)
-  for(i in 1:rep){
-    Alist[[i]] <- decomp(Sigma, order = perms[i,])
-    temp <- Alist[[i]] %*% t(Alist[[i]])
-    diff[i] <- sqrt(sum((temp[lower.tri(temp)]-Sigma[lower.tri(Sigma)])^2))
-    print(c(i,diff[i]))
-    diffdiag[i] <- sqrt(sum((diag(Sigma) - diag(temp))^2))
-    nu[i,] <- c(f1(Alist[[i]]^(2/alpha), alpha, uniroot(function(x) f1(A^(2/alpha), alpha, x) - 0.1, c(1,10^10))$root),
-                 f2(Alist[[i]]^(2/alpha), alpha, uniroot(function(x) f2(A^(2/alpha), alpha,  x) - 0.1, c(1,10^10))$root),
-                 f3(Alist[[i]]^(2/alpha),  alpha, uniroot(function(x) f3(A^(2/alpha), alpha, x) - 0.1, c(1,10^10))$root),
-                 f4(Alist[[i]]^(2/alpha),  alpha, uniroot(function(x) f4(A^(2/alpha), alpha, x) - 0.1, c(1,10^10))$root))
-  }
-  indx1 <- (which(diffdiag <= 1e-10 & diff < 1e-10))
-  indx2 <- (which(diffdiag <= 5 & diff < 1e-10))
-  nmbr <- length(which(diff < 1e-10))
-  return(list('nu1' = nu[indx1,], 'nu2' = nu[indx2,], 'nmbr' = nmbr))
+kall <- Hilleye(c(data), c(50:5000), smooth = FALSE)$keye
+(alpha <- 1/Hill(sort(c(data), decreasing = TRUE), kall))
+
+k <- seq(15,100, by = 1)
+kl <- length(k)
+results <- numeric(kl)
+for(j in 1:kl){
+  print(j)
+  results[j] <- test_bootstrap(rep(k[j],d),data, B = 2000)
 }
 
-alpha <- 4
-nuA1 <- simResults(alpha, SigmaA1, A1)
-nuA2 <- simResults(alpha, SigmaA2, A2)
-nuA3 <- simResults(alpha, SigmaA3, A3)
-c(nuA1$nmbr,nuA2$nmbr,nuA3$nmbr)
-numbers <- c(nrow(nuA1$nu1),nrow(nuA2$nu1),nrow(nuA3$nu1),
-             nrow(nuA1$nu2),nrow(nuA2$nu2),nrow(nuA3$nu2))
-names <- c(expression(paste(A[1], " (38)")), expression(paste(A[1], " (68)")),
-           expression(paste(A[2], " (12)")), expression(paste(A[2], " (58)")),
-           expression(paste(A[3], " (16)")), expression(paste(A[3], " (72)")))
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2))
+plot(alphaci[,1], pch = 20, col = "red", ylim = c(0,7), ylab = expression(paste(hat(alpha)[j])), 
+     xlab = "j", main = expression(paste("Estimates ", hat(alpha)[j], " with 95 % bootstrap confidence intervals")))
+points(alphaci[,2], pch = 20, col = "blue")
+points(alphaci[,3], pch = 20, col = "blue")
+for(i in 1:d){
+  segments(i, alphaci[i,2], i, alphaci[i,3], col = 'grey')
+}
+abline(h = alpha) 
 
-par(cex.lab=1.5,cex.axis=1.4,cex.main=1.75,mar=c(5,5,4,2))
-boxplot(nuA1$nu1[,1],nuA1$nu2[,1],nuA2$nu1[,1],nuA2$nu2[,1],nuA3$nu1[,1],nuA3$nu2[,1],
-        names = names, main = expression(paste("exponent measures of ", C[(sum)])), ylim = c(0.095,0.11))
-abline(h = 0.1, lwd  = 2)
+R <- apply(data, 1, function(i) sum(i^alpha)^(1/alpha))
+qu <- seq(0.95,0.999, by = 0.0005)
+r <- quantile(R, qu)
+m <- vector(length = length(qu))
+for(i in 1:length(qu)){
+  indx <- which(R > r[i])
+  nexc <- length(indx)
+  m[i] <- nexc*((r[i]^alpha)/n)
+}
 
-par(cex.lab=1.5,cex.axis=1.4,cex.main=1.75,mar=c(5,5,4,2))
-boxplot(nuA1$nu1[,2],nuA1$nu2[,2],nuA2$nu1[,2],nuA2$nu2[,2],nuA3$nu1[,2],nuA3$nu2[,2],
-        names = names, main = expression(paste("exponent measures of ", C[(prod)])), ylim = c(0.095,0.14))
-abline(h = 0.1, lwd  = 2)
+par(cex.lab=2,cex.axis=2,cex.main=1.5,mar=c(5,5.5,4,2))
+plot(qu, m, ylab = expression(paste(hat(m))), type = "l", lwd = 2,
+     xlab = expression(paste("quantile of ", R[1], ", ..., ", R[n])), 
+     main = expression(paste("Estimated mass ", hat(m), " as a function of ", r[0])))
+abline(h = 30)
 
-par(cex.lab=1.5,cex.axis=1.4,cex.main=1.75,mar=c(5,5,4,2))
-boxplot(nuA1$nu1[,3],nuA1$nu2[,3],nuA2$nu1[,3],nuA2$nu2[,3],nuA3$nu1[,3],nuA3$nu2[,3],
-        names = names, main = expression(paste("exponent measures of ", C[(min)])), ylim = c(0,0.35))
-abline(h = 0.1, lwd  = 2)
+#####################################################################
+################ Main results ########################
+#####################################################################
 
-par(cex.lab=1.5,cex.axis=1.4,cex.main=1.75,mar=c(5,5,4,2))
-boxplot(nuA1$nu1[,4],nuA1$nu2[,4],nuA2$nu1[,4],nuA2$nu2[,4],nuA3$nu1[,4],nuA3$nu2[,4],
-        names = names, main = expression(paste("exponent measures of ", C[(max)])), ylim = c(0.075,0.15))
-abline(h = 0.1, lwd  = 2)
+# The commented code below produces the file SPres.RData. It takes about 24h to run.
+
+#nsim <- 100
+#Atilde <- Ahat <- Ahat5 <- vector('list', length = nsim+1)
+#alpha <- vector(length = nsim+1)
+#kall <- Hilleye(c(data), c(50:10000), smooth = FALSE)$keye
+#alpha[1] <- 1/Hill(sort(c(data), decreasing = TRUE), kall)
+#Sigma <- tailDepMatrix(data, alpha = alpha[1], qu = 0.975, mest = TRUE)$Sigma
+#Atilde[[1]] <- tailDepMatrix(data, alpha = alpha[1], qu = 0.975, mest = TRUE)$A
+#Ahat[[1]] <- decompOne(Sigma)$A
+#Ahat5[[1]] <- decompOne(Sigma, tolr =  5)$A
+
+#I <- count <- 1
+#while(count <= nsim){
+#  set.seed(I)
+#  nsample <- sample(1:n,size=n,replace=T)
+#  newdata <- data[nsample,]
+#  kall <- Hilleye(c(newdata), c(50:10000), smooth = FALSE)$keye
+#  alphatemp <- 1/Hill(sort(c(newdata), decreasing = TRUE), kall)
+#  tdm <- tailDepMatrix(newdata, alpha = alphatemp, qu = 0.975, mest = TRUE)
+#  Ahattemp <- decompOne(tdm$Sigma, maxsim = 1000)$A #tries during 5 minutes max 
+#  if(!is.null(Ahattemp)){
+#    alpha[count+1] <- alphatemp
+#    Ahat[[count+1]] <- Ahattemp
+#    Ahat5[[count+1]] <- decompOne(tdm$Sigma, tolr = 5)$A
+#    Atilde[[count+1]] <- tdm$A
+#    count <- count + 1
+#   save(Ahat, Ahat5, Atilde, alpha, file = "FINres.RData")
+#  }
+#  I <- I + 1
+#}
+
+load("FINres.RData")
+
+nsim <- 100
+q <- 0.005
+v <- rep(c(0.02,0.05,0.03), 10)
+
+minsum <- function(x, v = rep(1/length(x), length(x))){
+  return(min(sum(x[1:10]*v[1:10]),sum(x[11:20]*v[11:20]),sum(x[21:30]*v[21:30])))
+}
+maxsum <- function(x, v = rep(1/length(x), length(x))){
+  return(max(sum(x[1:10]*v[1:10]),sum(x[11:20]*v[11:20]),sum(x[21:30]*v[21:30])))
+}
+
+qsum <- quantile(rowSums(data)/d, 1-q, type = 4) 
+ressumAtilde <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Atilde[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d, d)))
+ressumA <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Ahat[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d,d)))
+ressumA5 <- sapply(c(1:nsim), function(k) MaxLinearProba(qsum, Ahat5[[k]]^(2/alpha[k]), alpha[k], "sum", rep(1/d,d)))
+
+qminsum <- quantile(apply(data, 1, function(i) minsum(i)), 1-q, type = 5)
+resminsumAtilde <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
+resminsumA <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
+resminsumA5 <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum)^alpha[k])))
+
+qmaxsum <- quantile(apply(data, 1, function(i) maxsum(i)), 1-q, type = 5)
+resmaxsumAtilde <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
+resmaxsumA <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
+resmaxsumA5 <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum)^alpha[k])))
+
+namesbox <- c(expression(paste(hat(A), " (exact)")), expression(paste(hat(A), " (approx)")), expression(tilde(A)))
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(ressumA, ressumA5, ressumAtilde), names = namesbox, ylim = c(0.003,0.0071),
+        main = expression(paste("Estimates ", hat(p)[sum], " (equal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(resminsumA, resminsumA5, resminsumAtilde), names = namesbox, ylim = c(0.003,0.0071),
+        main = expression(paste("Estimates ", hat(p)[minsum], " (equal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(resmaxsumA, resmaxsumA5, resmaxsumAtilde), names = namesbox, ylim = c(0.003,0.0071),
+        main = expression(paste("Estimates ", hat(p)[maxsum], " (equal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
 
 
+qsumv <- quantile(apply(data, 1, function(i) sum(v*i)),1-q, type = 4) 
+ressumAtildev <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Atilde[[k]]^(2/alpha[k]), alpha[k], "sum", v))
+ressumAv <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Ahat[[k]]^(2/alpha[k]), alpha[k], "sum", v))
+ressumA5v <- sapply(c(1:nsim), function(k) MaxLinearProba(qsumv, Ahat5[[k]]^(2/alpha[k]), alpha[k], "sum", v))
+
+qminsumv <- quantile(apply(data, 1, function(i) minsum(i, v)), 1-q, type = 5) 
+resminsumAtildev <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsumv, v)^alpha[k])))
+resminsumAv <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum,v)^alpha[k])))
+resminsumA5v <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) minsum(i/qminsum,v)^alpha[k])))
+
+qmaxsumv <- quantile(apply(data, 1, function(i) maxsum(i, v)), 1-q, type = 5) 
+resmaxsumAtildev <- sapply(c(1:nsim), function(k) sum(apply(Atilde[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsumv, v)^alpha[k])))
+resmaxsumAv <- sapply(c(1:nsim), function(k) sum(apply(Ahat[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum,v)^alpha[k])))
+resmaxsumA5v <- sapply(c(1:nsim), function(k) sum(apply(Ahat5[[k]]^(2/alpha[k]),2,function(i) maxsum(i/qmaxsum,v)^alpha[k])))
+
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(ressumAv, ressumA5v, ressumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
+        main = expression(paste("Estimates ", hat(p)[sum], " (unequal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(resminsumAv, resminsumA5v, resminsumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
+        main = expression(paste("Estimates ", hat(p)[minsum], " (unequal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
+
+par(cex.lab=1.5,cex.axis=2,cex.main=2,mar=c(5,5.5,4,2),mgp=c(3, 2, 0))
+boxplot(cbind(resmaxsumAv, resmaxsumA5v, resmaxsumAtildev), names = namesbox, ylim = c(0.0027,0.0069),
+        main = expression(paste("Estimates ", hat(p)[maxsum], " (unequal ", v, ")")))
+points(rep(q,3), pch = 15, cex = 1.75, col = "red")
 
